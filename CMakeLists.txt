@@ -62,7 +62,6 @@ find_package(ZLIB REQUIRED)
 find_package(BZip2 REQUIRED)
 find_package(LZ4 REQUIRED)
 find_package(Threads REQUIRED)
-find_package(uring REQUIRED)
 find_package(zstd REQUIRED)
 find_package(snappy REQUIRED)
 target_link_libraries(rocksdb INTERFACE
@@ -72,7 +71,6 @@ target_link_libraries(rocksdb INTERFACE
     ZLIB::ZLIB
     zstd::zstd
     snappy::snappy
-    uring::uring
     ${CMAKE_DL_LIBS}
 )
 

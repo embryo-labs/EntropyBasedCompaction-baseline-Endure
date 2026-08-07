@@ -2823,7 +2823,6 @@ class Benchmark {
   };
 
   std::shared_ptr<ErrorHandlerListener> listener_;
-  std::unique_ptr<ReporterAgent> reporter_agent_;
   std::shared_ptr<tmpdb::FluidLSMCompactor> endure_compactor_;
 
   std::unique_ptr<TimestampEmulator> mock_app_clock_;
@@ -3932,11 +3931,10 @@ class Benchmark {
           10 /* fairness */, RateLimiter::Mode::kReadsOnly));
     }
 
+    std::unique_ptr<ReporterAgent> reporter_agent;
     if (FLAGS_report_interval_seconds > 0) {
-      if (!reporter_agent_ || reporter_agent_->output_dir() != output_dir_) {
-        reporter_agent_.reset(new ReporterAgent(db_.db, FLAGS_env, output_dir_,
-                                                FLAGS_report_interval_seconds));
-      }
+      reporter_agent.reset(new ReporterAgent(db_.db, FLAGS_env, output_dir_,
+                                             FLAGS_report_interval_seconds));
     }
 
     ThreadArg* arg = new ThreadArg[n];
@@ -3963,7 +3961,7 @@ class Benchmark {
       arg[i].method = method;
       arg[i].shared = &shared;
       arg[i].thread = new ThreadState(i);
-      arg[i].thread->stats.SetReporterAgent(reporter_agent_.get());
+      arg[i].thread->stats.SetReporterAgent(reporter_agent.get());
       arg[i].thread->shared = &shared;
       FLAGS_env->StartThread(ThreadBody, &arg[i]);
     }

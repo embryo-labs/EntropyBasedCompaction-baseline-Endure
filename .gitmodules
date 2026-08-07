@@ -1,3 +1,4 @@
 [submodule "extern/rocksdb"]
 	path = extern/rocksdb
 	url = git@github.com:embryo-labs/EntropyBasedCompaction.git
+	branch = endure-6.22

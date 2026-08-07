@@ -37,10 +37,13 @@ TBlockIter* BlockBasedTable::NewDataBlockIterator(
 
   CachableEntry<UncompressionDict> uncompression_dict;
   if (rep_->uncompression_dict_reader) {
+    // For auto_readahead_size, it iterates over index to lookup for data
+    // blocks. And this could break the the sequentiality of the access
+    // pattern. So don't use the prefetch buffer in that case.
     const bool no_io = (ro.read_tier == kBlockCacheTier);
     s = rep_->uncompression_dict_reader->GetOrReadUncompressionDictionary(
-        prefetch_buffer, no_io, get_context, lookup_context,
-        &uncompression_dict);
+        (ro.auto_readahead_size ? nullptr : prefetch_buffer), no_io,
+        get_context, lookup_context, &uncompression_dict);
     if (!s.ok()) {
       iter->Invalidate(s);
       return iter;

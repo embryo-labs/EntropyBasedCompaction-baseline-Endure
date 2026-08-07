@@ -33,7 +33,23 @@ Status FilePrefetchBuffer::Prefetch(const IOOptions& opts,
   size_t offset_ = static_cast<size_t>(offset);
   uint64_t rounddown_offset = Rounddown(offset_, alignment);
   uint64_t roundup_end = Roundup(offset_ + n, alignment);
+
+  if (readaheadsize_cb_ != nullptr) {
+    uint64_t start_offset = rounddown_offset;
+    uint64_t end_offset = roundup_end;
+    readaheadsize_cb_(/*read_curr_block=*/true, start_offset, end_offset);
+    rounddown_offset = Rounddown(start_offset, alignment);
+    roundup_end = Roundup(end_offset, alignment);
+  }
+
+  // If the callback trimmed the range to zero, all blocks are in cache.
+  if (roundup_end <= rounddown_offset) {
+    return Status::OK();
+  }
+
   uint64_t roundup_len = roundup_end - rounddown_offset;
+  assert(roundup_len >= alignment);
+  assert(roundup_len % alignment == 0);
   assert(roundup_len >= alignment);
   assert(roundup_len % alignment == 0);
 

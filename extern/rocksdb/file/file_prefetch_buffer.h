@@ -9,6 +9,7 @@
 
 #pragma once
 #include <atomic>
+#include <functional>
 #include <sstream>
 #include <string>
 
@@ -48,10 +49,11 @@ class FilePrefetchBuffer {
   // does not make any sense. So it does nothing.
   // A user can construct a FilePrefetchBuffer without any arguments, but use
   // `Prefetch` to load data into the buffer.
-  FilePrefetchBuffer(RandomAccessFileReader* file_reader = nullptr,
-                     size_t readahead_size = 0, size_t max_readahead_size = 0,
-                     bool enable = true, bool track_min_offset = false,
-                     bool implicit_auto_readahead = false)
+  FilePrefetchBuffer(
+      RandomAccessFileReader* file_reader = nullptr, size_t readahead_size = 0,
+      size_t max_readahead_size = 0, bool enable = true,
+      bool track_min_offset = false, bool implicit_auto_readahead = false,
+      const std::function<void(bool, uint64_t&, uint64_t&)>& cb = nullptr)
       : buffer_offset_(0),
         file_reader_(file_reader),
         readahead_size_(readahead_size),
@@ -61,6 +63,7 @@ class FilePrefetchBuffer {
         enable_(enable),
         track_min_offset_(track_min_offset),
         implicit_auto_readahead_(implicit_auto_readahead),
+        readaheadsize_cb_(cb),
         prev_offset_(0),
         prev_len_(0),
         num_file_reads_(kMinNumFileReadsToStartAutoReadahead + 1) {}
@@ -123,6 +126,7 @@ class FilePrefetchBuffer {
   // implicit_auto_readahead is enabled by rocksdb internally after 2 sequential
   // IOs.
   bool implicit_auto_readahead_;
+  std::function<void(bool, uint64_t&, uint64_t&)> readaheadsize_cb_;
   size_t prev_offset_;
   size_t prev_len_;
   int num_file_reads_;

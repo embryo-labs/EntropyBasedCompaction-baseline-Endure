@@ -1434,6 +1434,9 @@ DEFINE_int32(skip_list_lookahead, 0, "Used with skip_list memtablerep; try "
 DEFINE_bool(report_file_operations, false, "if report number of file "
             "operations");
 DEFINE_int32(readahead_size, 0, "Iterator readahead size");
+DEFINE_bool(auto_readahead_size, false,
+            "Auto tune readahead_size during scans based on block cache and "
+            "iterate_upper_bound");
 
 DEFINE_bool(read_with_latest_user_timestamp, true,
             "If true, always use the current latest timestamp for read. If "
@@ -5711,6 +5714,8 @@ class Benchmark {
     int num_keys = 0;
     int64_t key_rand = 0;
     ReadOptions options(FLAGS_verify_checksum, true);
+    options.readahead_size = FLAGS_readahead_size;
+    options.auto_readahead_size = FLAGS_auto_readahead_size;
 
     QueryDecider query;
     query.Initiate({FLAGS_mix_get_ratio, FLAGS_mix_seek_ratio});

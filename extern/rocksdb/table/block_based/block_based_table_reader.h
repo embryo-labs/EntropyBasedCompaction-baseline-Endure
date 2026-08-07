@@ -649,23 +649,25 @@ struct BlockBasedTable::Rep {
   uint64_t sst_number_for_tracing() const {
     return file ? TableFileNameToNumber(file->file_name()) : UINT64_MAX;
   }
-  void CreateFilePrefetchBuffer(size_t readahead_size,
-                                size_t max_readahead_size,
-                                std::unique_ptr<FilePrefetchBuffer>* fpb,
-                                bool implicit_auto_readahead) const {
+  void CreateFilePrefetchBuffer(
+      size_t readahead_size, size_t max_readahead_size,
+      std::unique_ptr<FilePrefetchBuffer>* fpb, bool implicit_auto_readahead,
+      const std::function<void(bool, uint64_t&, uint64_t&)>& readaheadsize_cb =
+          nullptr) const {
     fpb->reset(new FilePrefetchBuffer(
         file.get(), readahead_size, max_readahead_size,
         !ioptions.allow_mmap_reads /* enable */, false /* track_min_offset*/,
-        implicit_auto_readahead));
+        implicit_auto_readahead, readaheadsize_cb));
   }
 
   void CreateFilePrefetchBufferIfNotExists(
       size_t readahead_size, size_t max_readahead_size,
-      std::unique_ptr<FilePrefetchBuffer>* fpb,
-      bool implicit_auto_readahead) const {
+      std::unique_ptr<FilePrefetchBuffer>* fpb, bool implicit_auto_readahead,
+      const std::function<void(bool, uint64_t&, uint64_t&)>& readaheadsize_cb =
+          nullptr) const {
     if (!(*fpb)) {
       CreateFilePrefetchBuffer(readahead_size, max_readahead_size, fpb,
-                               implicit_auto_readahead);
+                               implicit_auto_readahead, readaheadsize_cb);
     }
   }
 };

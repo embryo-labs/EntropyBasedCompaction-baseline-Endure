@@ -7,10 +7,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 #pragma once
-#include "table/block_based/block_based_table_reader.h"
+#include <deque>
 
+#include "table/block_based/block_based_table_reader.h"
 #include "table/block_based/block_based_table_reader_impl.h"
 #include "table/block_based/block_prefetcher.h"
+#include "table/block_based/cachable_entry.h"
 #include "table/block_based/reader_common.h"
 
 namespace ROCKSDB_NAMESPACE {
@@ -41,7 +43,7 @@ class BlockBasedTableIterator : public InternalIteratorBase<Slice> {
         check_filter_(check_filter),
         need_upper_bound_check_(need_upper_bound_check) {}
 
-  ~BlockBasedTableIterator() {}
+  ~BlockBasedTableIterator() { ClearBlockHandles(); }
 
   void Seek(const Slice& target) override;
   void SeekForPrev(const Slice& target) override;
@@ -89,8 +91,12 @@ class BlockBasedTableIterator : public InternalIteratorBase<Slice> {
     return block_iter_.value();
   }
   Status status() const override {
-    // Prefix index set status to NotFound when the prefix does not exist
-    if (!index_iter_->status().ok() && !index_iter_->status().IsNotFound()) {
+    // In case of block cache readahead lookup, it won't add the block to
+    // block_handles if it's index is invalid. So index_iter_->status check can
+    // be skipped.
+    // Prefix index set status to NotFound when the prefix does not exist.
+    if (IsIndexAtCurr() && !index_iter_->status().ok() &&
+        !index_iter_->status().IsNotFound()) {
       return index_iter_->status();
     } else if (block_iter_points_to_real_block_) {
       return block_iter_.status();
@@ -142,7 +148,7 @@ class BlockBasedTableIterator : public InternalIteratorBase<Slice> {
   }
 
   void SavePrevIndexValue() {
-    if (block_iter_points_to_real_block_) {
+    if (block_iter_points_to_real_block_ && IsIndexAtCurr()) {
       // Reseek. If they end up with the same data block, we shouldn't re-fetch
       // the same data block.
       prev_block_offset_ = index_iter_->value().handle.offset();
@@ -196,12 +202,42 @@ class BlockBasedTableIterator : public InternalIteratorBase<Slice> {
 
   BlockPrefetcher block_prefetcher_;
 
+  // BlockHandleInfo is used to store the info needed when block cache lookup
+  // ahead is enabled to tune readahead_size.
+  struct BlockHandleInfo {
+    void SetFirstInternalKey(const Slice& key) {
+      if (key.empty()) {
+        return;
+      }
+      size_t size = key.size();
+      buf_ = std::unique_ptr<char[]>(new char[size]);
+      memcpy(buf_.get(), key.data(), size);
+      first_internal_key_ = Slice(buf_.get(), size);
+    }
+
+    BlockHandle handle_;
+    bool is_cache_hit_ = false;
+    CachableEntry<Block> cachable_entry_;
+    Slice first_internal_key_;
+    std::unique_ptr<char[]> buf_;
+  };
+
+  bool IsIndexAtCurr() const { return is_index_at_curr_block_; }
+
+  // It stores all the block handles that are lookuped in cache ahead when
+  // BlockCacheLookupForReadAheadSize is called. Since index_iter_ may point to
+  // different blocks when readahead_size is calculated in
+  // BlockCacheLookupForReadAheadSize, to avoid index_iter_ reseek,
+  // block_handles_ is used.
+  // `block_handles_` is lazily constructed to save CPU when it is unused
+  std::unique_ptr<std::deque<BlockHandleInfo>> block_handles_;
+
+  // The prefix of the key called with SeekImpl().
+  // This is for readahead trimming so no data blocks containing keys of a
+  // different prefix are prefetched
+  std::string seek_key_prefix_for_readahead_trimming_ = "";
+
   const bool allow_unprepared_value_;
-  // True if block_iter_ is initialized and points to the same block
-  // as index iterator.
-  bool block_iter_points_to_real_block_;
-  // See InternalIteratorBase::IsOutOfBound().
-  bool is_out_of_bound_ = false;
   // How current data block's boundary key with the next block is compared with
   // iterate upper bound.
   BlockUpperBound block_upper_bound_check_ = BlockUpperBound::kUnknown;
@@ -211,6 +247,28 @@ class BlockBasedTableIterator : public InternalIteratorBase<Slice> {
   bool check_filter_;
   // TODO(Zhongyi): pick a better name
   bool need_upper_bound_check_;
+
+  // If set to true, it'll lookup in the cache ahead to estimate the readahead
+  // size based on cache hit and miss.
+  bool readahead_cache_lookup_ = false;
+
+  bool is_index_out_of_bound_ = false;
+
+  // Used in case of auto_readahead_size to disable the block_cache lookup if
+  // direction is reversed from forward to backward. In case of backward
+  // direction, SeekForPrev or Prev might call Seek from db_iter. So direction
+  // is used to disable the lookup.
+  IterDirection direction_ = IterDirection::kForward;
+
+  // True if block_iter_ is initialized and points to the same block
+  // as index iterator.
+  bool block_iter_points_to_real_block_;
+  // See InternalIteratorBase::IsOutOfBound().
+  bool is_out_of_bound_ = false;
+  // During cache lookup to find readahead size, index_iter_ is iterated and it
+  // can point to a different block.
+  // Whether index is expected to match the current data_block_iter_.
+  bool is_index_at_curr_block_ = true;
 
   // If `target` is null, seek to first.
   void SeekImpl(const Slice* target);
@@ -227,6 +285,80 @@ class BlockBasedTableIterator : public InternalIteratorBase<Slice> {
   // Note MyRocks may update iterate bounds between seek. To workaround it,
   // we need to check and update data_block_within_upper_bound_ accordingly.
   void CheckDataBlockWithinUpperBound();
+
+  // *** BEGIN APIs relevant to auto tuning of readahead_size ***
+
+  // This API is called to lookup the data blocks ahead in the cache to tune
+  // the start and end offsets passed.
+  void BlockCacheLookupForReadAheadSize(bool read_curr_block,
+                                        uint64_t& start_offset,
+                                        uint64_t& end_offset);
+
+  void ResetBlockCacheLookupVar() {
+    is_index_out_of_bound_ = false;
+    readahead_cache_lookup_ = false;
+    ClearBlockHandles();
+  }
+
+  bool IsNextBlockOutOfReadaheadBound() {
+    const Slice& index_iter_user_key = index_iter_->user_key();
+    // If curr block's index key >= iterate_upper_bound, it means all the keys
+    // in next block or above are out of bound.
+    bool out_of_upper_bound =
+        read_options_.iterate_upper_bound != nullptr &&
+        (user_comparator_.CompareWithoutTimestamp(
+             index_iter_user_key,
+             /*a_has_ts=*/true, *read_options_.iterate_upper_bound,
+             /*b_has_ts=*/false) >= 0
+             ? true
+             : false);
+    if (out_of_upper_bound) {
+      return true;
+    }
+
+    // If curr block's index key has a different prefix from the seek key's, it
+    // means all the keys in next block or above has a different prefix from the
+    // seek key's.
+    bool out_of_prefix_bound =
+        (read_options_.prefix_same_as_start &&
+         !seek_key_prefix_for_readahead_trimming_.empty() &&
+         (prefix_extractor_ && prefix_extractor_->InDomain(index_iter_user_key)
+              ? (prefix_extractor_->Transform(index_iter_user_key)
+                     .compare(seek_key_prefix_for_readahead_trimming_) != 0)
+              : user_comparator_.CompareWithoutTimestamp(
+                    index_iter_user_key,
+                    /*a_has_ts=*/true, seek_key_prefix_for_readahead_trimming_,
+                    /*b_has_ts=*/false) > 0));
+
+    if (out_of_prefix_bound) {
+      return true;
+    }
+
+    return false;
+  }
+
+  void ClearBlockHandles() {
+    if (block_handles_ != nullptr) {
+      block_handles_->clear();
+    }
+  }
+
+  // Reset prev_block_offset_. If index_iter_ has moved ahead, it won't get
+  // accurate prev_block_offset_.
+  void ResetPreviousBlockOffset() {
+    prev_block_offset_ = std::numeric_limits<uint64_t>::max();
+  }
+
+  bool DoesContainBlockHandles() {
+    return block_handles_ != nullptr && !block_handles_->empty();
+  }
+
+  void InitializeStartAndEndOffsets(bool read_curr_block,
+                                    bool& found_first_miss_block,
+                                    uint64_t& start_updated_offset,
+                                    uint64_t& end_updated_offset,
+                                    size_t& prev_handles_size);
+  // *** END APIs relevant to auto tuning of readahead_size ***
 
   bool CheckPrefixMayMatch(const Slice& ikey, IterDirection direction) {
     if (need_upper_bound_check_ && direction == IterDirection::kBackward) {

@@ -2771,6 +2771,7 @@ class Benchmark {
   int64_t merge_keys_;
   uint64_t duration_;
   uint64_t benchmark_write_rate_limit_;
+  std::string writes_per_second_file_;
   bool report_file_operations_;
   bool use_blob_db_;  // Stacked BlobDB
   std::vector<std::string> keys_;
@@ -3422,12 +3423,16 @@ class Benchmark {
         benchmark_write_rate_limit_ =
             (it != benchmark.end() ? static_cast<uint64_t>(*it)
                                    : FLAGS_benchmark_write_rate_limit);
+        it = benchmark.find("writes_per_second_file");
+        writes_per_second_file_ =
+            (it != benchmark.end() ? static_cast<std::string>(*it) : "");
       } else {
         std::getline(std::get<1>(benchmarks), name, ',');
         num_threads = FLAGS_threads;
         duration_ = FLAGS_duration;
         writes_ = (FLAGS_writes < 0 ? FLAGS_num : FLAGS_writes);
         benchmark_write_rate_limit_ = FLAGS_benchmark_write_rate_limit;
+        writes_per_second_file_ = FLAGS_writes_per_second_file;
       }
       first_benchmark = false;
       // Sanitize parameters
@@ -6702,7 +6707,7 @@ class Benchmark {
     std::unique_ptr<const char[]> key_guard;
     Slice key = AllocateKey(&key_guard);
 
-    PerSec writes_per_second(FLAGS_writes_per_second_file);
+    PerSec writes_per_second(writes_per_second_file_);
     auto init = writes_per_second.init();
     if (init >= 0) {
       thread->shared->write_rate_limiter.reset(NewGenericRateLimiter(init));
